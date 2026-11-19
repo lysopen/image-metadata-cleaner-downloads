@@ -1,0 +1,96 @@
+name: Publish download mirror
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Mirror verified public installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp > releases.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          site = Path("site")
+          site.mkdir()
+          pages = json.loads(Path("releases.json").read_text(encoding="utf-8"))
+          versions = {}
+          for page in pages:
+              for release in page:
+                  tag = release["tag_name"]
+                  if release["draft"] or release["prerelease"] or not re.fullmatch(r"v\d+\.\d+\.\d+", tag, re.ASCII):
+                      continue
+                  name = f"ImageMetadataCleaner-{tag[1:]}-Setup.exe"
+                  candidates = [asset for asset in release["assets"] if asset["name"] == name]
+                  if len(candidates) != 1:
+                      raise SystemExit(f"{tag}: expected one public asset named {name}")
+                  asset = candidates[0]
+                  digest = asset.get("digest") or ""
+                  url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
+                  if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest) or asset["browser_download_url"] != url:
+                      raise SystemExit(f"{tag}: unexpected public asset URL or missing SHA-256")
+                  target = site / tag / name
+                  target.parent.mkdir()
+                  subprocess.run([
+                      "curl", "-q", "--silent", "--show-error", "--fail", "--location", "--retry", "3",
+                      "--proto", "=https", "--proto-redir", "=https", "--max-time", "120",
+                      "--output", str(target), url,
+                  ], check=True)
+                  with target.open("rb") as data:
+                      actual = "sha256:" + hashlib.file_digest(data, "sha256").hexdigest()
+                  if target.stat().st_size != asset["size"] or actual != digest:
+                      raise SystemExit(f"{tag}: installer transfer integrity check failed")
+                  versions[tag] = target.relative_to(site).as_posix()
+                  print(f"{tag}: verified {target.stat().st_size} bytes")
+
+          if not versions:
+              raise SystemExit("No published installers found")
+          index = [
+              '<!doctype html><html lang="zh-CN"><meta charset="utf-8">',
+              '<meta name="viewport" content="width=device-width, initial-scale=1">',
+              '<title>Image Metadata Cleaner 下载</title>',
+              '<main><h1>Image Metadata Cleaner 下载</h1><p>Windows 11 x64 安装包</p><ul>',
+          ]
+          for tag in sorted(versions, key=lambda v: tuple(map(int, v[1:].split("."))), reverse=True):
+              index.append(f'<li><a href="{versions[tag]}" download>{tag} 安装包 (.exe)</a></li>')
+          index.append('</ul></main></html>')
+          (site / "index.html").write_text("\n".join(index) + "\n", encoding="utf-8")
+          PY
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Publish on GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
