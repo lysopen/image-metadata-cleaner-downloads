@@ -3,7 +3,7 @@
 这是 **Image Metadata Cleaner（Windows 11 x64）** 的独立下载仓，只分发正式安装包。
 
 - [CDN 下载页](https://lysopen.github.io/image-metadata-cleaner-downloads/)
-- [GitHub 发布列表](../../releases)
+- [GitHub 发布列表](https://github.com/lysopen/image-metadata-cleaner-downloads/releases)
 
 请选择对应版本的 `ImageMetadataCleaner-版本号-Setup.exe`。
 
